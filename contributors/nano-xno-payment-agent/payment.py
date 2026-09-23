@@ -33,7 +33,7 @@ from uagents_core.contrib.protocols.payment import (
 )
 
 from shared import create_text_chat
-from verify_nano import verify_nano_receive
+from verify_nano import verify_nano_send
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -41,9 +41,6 @@ from verify_nano import verify_nano_receive
 
 # Amount requested per job, in XNO. Fee is always zero at the protocol level.
 DEFAULT_XNO_AMOUNT = os.getenv("NANO_AMOUNT", "0.0001")
-
-# How far back (seconds) the seller will accept a receive as this payment.
-LOOKBACK_SECONDS = int(os.getenv("NANO_LOOKBACK_SECONDS", "3600"))
 
 payment_proto = Protocol(spec=payment_protocol_spec, role="seller")
 
@@ -54,6 +51,11 @@ NANO_ACCOUNT = os.getenv("NANO_ACCOUNT", "")
 
 XNO_FUNDS = Funds(currency="XNO", amount=DEFAULT_XNO_AMOUNT, payment_method="nano_xno")
 ACCEPTED_FUNDS = [XNO_FUNDS]
+
+# Replay protection: remember send-block hashes already honoured, so the same
+# payment cannot be used to claim service twice. Persist in ctx.storage so it
+# survives restarts.
+PAID_PREFIX = "nano_paid:"
 
 
 @payment_proto.on_message(CommitPayment)
@@ -86,29 +88,42 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
         )
         return
 
-    # The buyer names its Nano receiving-account hash as transaction_id.
+    # The buyer names its Nano send block hash as transaction_id.
     tx_id = msg.transaction_id
-    ctx.logger.info(f"[nano] Verifying receive of {msg.funds.amount} XNO via {tx_id}")
+    ctx.logger.info(f"[nano] Verifying send {tx_id} of {msg.funds.amount} XNO")
+
+    # Replay protection: reject a send hash already honoured.
+    paid_key = PAID_PREFIX + tx_id
+    if ctx.storage.has(paid_key) or ctx.storage.get(paid_key):
+        ctx.logger.warning(f"[nano] Send {tx_id} already honoured; rejecting replay")
+        await ctx.send(
+            sender,
+            CancelPayment(
+                transaction_id=tx_id,
+                reason="Payment already used",
+            ),
+        )
+        return
 
     # Run the blocking RPC verify off the event loop so the agent keeps serving
     # other messages while the public Nano node answers.
-    verified_hash = await asyncio.to_thread(
-        verify_nano_receive,
+    ok = await asyncio.to_thread(
+        verify_nano_send,
+        tx_id,
         NANO_ACCOUNT,
         str(msg.funds.amount),
-        lookback_seconds=LOOKBACK_SECONDS,
-        expected_hash=tx_id,
         logger=ctx.logger,
     )
-    if verified_hash:
-        ctx.logger.info(f"[nano] Payment confirmed: {verified_hash}")
+    if ok:
+        ctx.storage.set(paid_key, True)
+        ctx.logger.info(f"[nano] Payment confirmed: {tx_id}")
         await ctx.send(sender, CompletePayment(transaction_id=tx_id))
         # Continue the seller's own post-payment handler here, e.g. release the
         # purchased service / data.
         await ctx.send(
             sender,
             create_text_chat(
-                f"Payment verified (XNO block {verified_hash}). Your job is being processed."
+                f"Payment verified (XNO send block {tx_id}). Your job is being processed."
             ),
         )
     else:
