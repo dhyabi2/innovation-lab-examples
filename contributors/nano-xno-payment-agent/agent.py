@@ -9,6 +9,7 @@ load_dotenv()
 from uagents import Agent, Context  # noqa: E402
 
 from chat_proto import chat_proto  # noqa: E402
+from payment import payment_proto  # noqa: E402
 
 agent = Agent(
     name=os.getenv("AGENT_NAME", "Nano XNO Payment Agent"),
@@ -18,6 +19,7 @@ agent = Agent(
 )
 
 agent.include(chat_proto, publish_manifest=True)
+agent.include(payment_proto, publish_manifest=True)
 
 
 @agent.on_event("startup")

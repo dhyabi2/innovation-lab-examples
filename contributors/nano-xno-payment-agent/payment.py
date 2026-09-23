@@ -18,6 +18,7 @@ Nano specifics this example highlights:
     (verify_nano.py) — no escrow, no gas, no settlement window, no reversal.
 """
 
+import asyncio
 import os
 
 from uagents import Context, Protocol
@@ -89,10 +90,14 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
     tx_id = msg.transaction_id
     ctx.logger.info(f"[nano] Verifying receive of {msg.funds.amount} XNO via {tx_id}")
 
-    verified_hash = verify_nano_receive(
+    # Run the blocking RPC verify off the event loop so the agent keeps serving
+    # other messages while the public Nano node answers.
+    verified_hash = await asyncio.to_thread(
+        verify_nano_receive,
         NANO_ACCOUNT,
         str(msg.funds.amount),
         lookback_seconds=LOOKBACK_SECONDS,
+        expected_hash=tx_id,
         logger=ctx.logger,
     )
     if verified_hash:

@@ -49,12 +49,14 @@ def verify_nano_receive(
     expected_amount_xno: str | float,
     *,
     lookback_seconds: int = 3600,
+    expected_hash: str | None = None,
     logger: Any = None,
 ) -> str | None:
     """Verify `account` received at least `expected_amount_xno` XNO recently.
 
-    Returns the verified block hash on success, or None if no matching confirmed
-    receive is found in the recent history.
+    If `expected_hash` is given, the confirmed receive's block hash must match it
+    (the buyer's reported `transaction_id`), so one payment cannot verify many
+    commits. Returns the verified block hash on success, or None.
     """
     if not account:
         if logger:
@@ -109,11 +111,15 @@ def verify_nano_receive(
             received_raw = 0
         if received_raw >= expected_raw:
             received_xno = received_raw / RAW_PER_XNO
+            entry_hash = str(entry.get("hash") or "")
+            # If the buyer reported a specific transaction (block hash), only
+            # that exact receive counts — otherwise one payment could be reused
+            # to verify many commits.
+            if expected_hash and entry_hash.lower() != str(expected_hash).lower():
+                continue
             if logger:
-                logger.info(
-                    f"Nano payment verified: {entry.get('hash')} ({received_xno} XNO)"
-                )
-            return str(entry.get("hash"))
+                logger.info(f"Nano payment verified: {entry_hash} ({received_xno} XNO)")
+            return entry_hash
 
     if logger:
         logger.error(

@@ -52,6 +52,38 @@ def test_verifies_confirmed_receive_above_threshold():
     assert result == "AAA"
 
 
+def test_requires_matching_transaction_hash_when_given():
+    now = verify_nano.time.time()
+    payload = {
+        "history": [
+            _receive(int(0.05 * verify_nano.RAW_PER_XNO), int(now - 10), h="AAA")
+        ]
+    }
+    with mock.patch.object(verify_nano, "nano_rpc_post", return_value=payload):
+        # Hash mismatch -> not verified (the buyer's reported tx does not match).
+        assert (
+            verify_nano.verify_nano_receive(
+                "nano_1acct",
+                "0.03",
+                lookback_seconds=3600,
+                expected_hash="ZZZ",
+                logger=None,
+            )
+            is None
+        )
+        # Exact match -> verified.
+        assert (
+            verify_nano.verify_nano_receive(
+                "nano_1acct",
+                "0.03",
+                lookback_seconds=3600,
+                expected_hash="AAA",
+                logger=None,
+            )
+            == "AAA"
+        )
+
+
 def test_rejects_receive_below_threshold():
     now = verify_nano.time.time()
     payload = {
