@@ -110,3 +110,23 @@ def test_returns_false_for_live_rpc_error():
     ):
         ok = verify_nano.verify_nano_send("ABC", "nano_1seller", "0.03", logger=None)
     assert ok is False
+
+
+def test_fails_closed_when_contents_is_a_hash_string():
+    # A Nano node can return contents as the raw block hash string (legacy /
+    # json_block not honoured) rather than the dict with link_as_account. The
+    # verifier must not crash with AttributeError; it must fail closed.
+    payload = _send_block(int(0.05 * verify_nano.RAW_PER_XNO))
+    payload["contents"] = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    with mock.patch.object(verify_nano, "nano_rpc_post", return_value=payload):
+        ok = verify_nano.verify_nano_send("ABC", "nano_1seller", "0.03", logger=None)
+    assert ok is False
+
+
+def test_fails_closed_when_contents_missing():
+    # Missing contents (None) must also fail closed rather than crash.
+    payload = _send_block(int(0.05 * verify_nano.RAW_PER_XNO))
+    payload["contents"] = None
+    with mock.patch.object(verify_nano, "nano_rpc_post", return_value=payload):
+        ok = verify_nano.verify_nano_send("ABC", "nano_1seller", "0.03", logger=None)
+    assert ok is False

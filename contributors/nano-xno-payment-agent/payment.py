@@ -93,6 +93,12 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
     ctx.logger.info(f"[nano] Verifying send {tx_id} of {msg.funds.amount} XNO")
 
     # Replay protection: reject a send hash already honoured.
+    #
+    # Reserve the key BEFORE the awaited on-chain verify so a second
+    # CommitPayment for the same tx_id cannot slip past the has() check while
+    # the first is still awaiting the RPC (they would both honour one payment).
+    # If verification fails we release the reservation so a genuine retry can
+    # re-verify; only a confirmed payment keeps the flag.
     paid_key = PAID_PREFIX + tx_id
     if ctx.storage.has(paid_key) or ctx.storage.get(paid_key):
         ctx.logger.warning(f"[nano] Send {tx_id} already honoured; rejecting replay")
@@ -104,6 +110,9 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
             ),
         )
         return
+
+    # Reserve now (small window vs a truly concurrent duplicate), then verify.
+    ctx.storage.set(paid_key, "verifying")
 
     # Run the blocking RPC verify off the event loop so the agent keeps serving
     # other messages while the public Nano node answers.
@@ -127,6 +136,9 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
             ),
         )
     else:
+        # Verification failed — release the reservation so a corrected or
+        # different commit for this tx is not permanently stuck as "paid".
+        ctx.storage.remove(paid_key)
         ctx.logger.error(f"[nano] Payment NOT verified for tx {tx_id}")
         await ctx.send(
             sender,

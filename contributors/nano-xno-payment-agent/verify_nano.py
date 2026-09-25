@@ -126,8 +126,19 @@ def verify_nano_send(
         return False
 
     # contents.link_as_account is the destination account of a send block.
-    contents = data.get("contents") or {}
-    dest = contents.get("link_as_account", "")
+    # With json_block it is a dict; some nodes/legacy paths return the raw
+    # block hash as a string instead. Guard against both so the handler never
+    # crashes on a malformed payload — fail closed on anything unexpected.
+    contents = data.get("contents")
+    if not isinstance(contents, dict):
+        if logger:
+            got = type(contents).__name__ if contents is not None else "missing"
+            logger.error(
+                f"Block {send_hash} returned unexpected contents ({got}); "
+                "cannot confirm destination"
+            )
+        return False
+    dest = contents.get("link_as_account", "") or ""
     if dest.lower() != expected_recipient.lower():
         if logger:
             logger.error(
