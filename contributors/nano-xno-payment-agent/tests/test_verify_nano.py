@@ -130,3 +130,49 @@ def test_fails_closed_when_contents_missing():
     with mock.patch.object(verify_nano, "nano_rpc_post", return_value=payload):
         ok = verify_nano.verify_nano_send("ABC", "nano_1seller", "0.03", logger=None)
     assert ok is False
+
+
+# --- Buyer-declared amount guard (AI-review blocking finding 2026-09-25) ---
+# The seller must verify against what IT accepted (ACCEPTED_FUNDS[0].amount),
+# never the buyer-controlled msg.funds.amount. declared_matches_accepted is the
+# pure decision used in payment.py before any on-chain check.
+
+def test_declared_matches_accepted_exact():
+    # 0.0001 declared against 0.0001 accepted -> exact match, accepted.
+    assert verify_nano.declared_matches_accepted("0.0001", "0.0001") is True
+    assert verify_nano.declared_matches_accepted("0.5", "0.5") is True
+
+
+def test_declared_matches_accepted_mismatch_rejected():
+    # A buyer declaring less (or more) than the accepted amount must NOT match.
+    assert verify_nano.declared_matches_accepted("0.00001", "0.0001") is False
+    assert verify_nano.declared_matches_accepted("0.001", "0.0001") is False
+    # The classic bypass: a microscopic declared amount.
+    assert verify_nano.declared_matches_accepted("0.000000000000000000001", "0.0001") is False
+
+
+def test_declared_matches_accepted_unparseable_fails_closed():
+    # A buyer passing a non-numeric amount must fail closed.
+    assert verify_nano.declared_matches_accepted("abc", "0.0001") is False
+    assert verify_nano.declared_matches_accepted("", "0.0001") is False
+    assert verify_nano.declared_matches_accepted("0.0001", "") is False
+
+
+def test_payment_verifies_seller_accepted_amount_not_declared():
+    """verify/commit path must not let the buyer set the verification threshold.
+
+    Static guard: payment.py must call verify_nano_send with the seller's
+    accepted amount and must reject a mismatched declared amount — never pass
+    msg.funds.amount straight through to the on-chain verifier.
+    """
+    src = (Path(__file__).resolve().parent.parent / "payment.py").read_text()
+    # verify_nano_send must be called with the seller's accepted amount, not the
+    # buyer-declared msg.funds.amount.
+    assert "str(accepted_amount)" in src, (
+        "verify_nano_send must use the seller's accepted amount"
+    )
+    # The only place the buyer-declared amount appears must be the mismatch
+    # guard (which rejects it against the accepted amount) — never as the
+    # verification threshold passed to the on-chain verifier.
+    assert "declared_matches_accepted(msg.funds.amount, accepted_amount)" in src
+    assert "does not match the " in src and "accepted amount" in src

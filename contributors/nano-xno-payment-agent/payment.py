@@ -33,7 +33,7 @@ from uagents_core.contrib.protocols.payment import (
 )
 
 from shared import create_text_chat
-from verify_nano import verify_nano_send
+from verify_nano import verify_nano_send, declared_matches_accepted
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -88,9 +88,34 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
         )
         return
 
+    # Runtime amount guard (AI-review blocking finding 2026-09-25): the buyer
+    # controls msg.funds, so we MUST NOT verify against the amount they declare
+    # — they could claim a microscopic amount and be priced at their own word.
+    # The on-chain check must enforce what the SELLER accepted and requested
+    # (ACCEPTED_FUNDS[0].amount). Reject any commit whose declared funds do not
+    # exactly match the accepted amount, logging the divergence for audit,
+    # before any RPC or work is spent.
+    accepted_amount = ACCEPTED_FUNDS[0].amount
+    if not declared_matches_accepted(msg.funds.amount, accepted_amount):
+        ctx.logger.error(
+            f"[nano] Amount mismatch: buyer declared {msg.funds.amount} XNO but "
+            f"this seller accepted {accepted_amount} XNO; rejecting"
+        )
+        await ctx.send(
+            sender,
+            CancelPayment(
+                transaction_id=msg.transaction_id,
+                reason=(
+                    f"Declared amount {msg.funds.amount} XNO does not match the "
+                    f"accepted amount {accepted_amount} XNO"
+                ),
+            ),
+        )
+        return
+
     # The buyer names its Nano send block hash as transaction_id.
     tx_id = msg.transaction_id
-    ctx.logger.info(f"[nano] Verifying send {tx_id} of {msg.funds.amount} XNO")
+    ctx.logger.info(f"[nano] Verifying send {tx_id} of {accepted_amount} XNO")
 
     # Replay protection: reject a send hash already honoured.
     #
@@ -115,12 +140,15 @@ async def handle_commit_payment(ctx: Context, sender: str, msg: CommitPayment):
     ctx.storage.set(paid_key, "verifying")
 
     # Run the blocking RPC verify off the event loop so the agent keeps serving
-    # other messages while the public Nano node answers.
+    # other messages while the public Nano node answers. Verify against the
+    # SELLER's accepted amount (accepted_amount), never the buyer's declared
+    # msg.funds.amount — a buyer-controlled amount is the bypass the guard above
+    # closes, and this call must not reintroduce it.
     ok = await asyncio.to_thread(
         verify_nano_send,
         tx_id,
         NANO_ACCOUNT,
-        str(msg.funds.amount),
+        str(accepted_amount),
         logger=ctx.logger,
     )
     if ok:

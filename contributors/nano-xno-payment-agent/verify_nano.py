@@ -44,6 +44,23 @@ def _xno_to_raw(xno: str | float) -> int | None:
         return None
 
 
+def declared_matches_accepted(declared_xno, accepted_xno) -> bool:
+    """True iff a buyer's declared funds exactly equal what the seller accepted.
+
+    The buyer controls the amount they declare on CommitPayment, so accepting
+    \"at least the declared amount\" lets a buyer price themselves at a
+    microscopic figure.  The accepted amount comes from the seller's own
+    ACCEPTED_FUNDS (what it requested through RequestPayment), never from the
+    buyer's message.  Returns False for any non-equality or unparseable value,
+    so a bad declared amount fails closed.
+    """
+    declared_raw = _xno_to_raw(str(declared_xno))
+    accepted_raw = _xno_to_raw(str(accepted_xno))
+    if declared_raw is None or accepted_raw is None:
+        return False
+    return declared_raw == accepted_raw
+
+
 def nano_rpc_post(action: str, params: dict[str, Any]) -> dict[str, Any]:
     """POST a Nano RPC action to the public node and return parsed JSON."""
     payload = json.dumps({"action": action, **params}).encode("utf-8")
